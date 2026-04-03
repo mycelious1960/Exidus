@@ -233,7 +233,7 @@ function buildPriorities(input: {
       ? `Keep ${topPriorities[0]} as a front-of-plan decision filter.`
       : undefined,
     input.readinessProfile.blockers[0]
-      ? `Reduce the current blocker around ${sentenceFragment(input.readinessProfile.blockers[0])}.`
+      ? `Reduce the most immediate blocker: ${blockerPriorityLine(input.readinessProfile.blockers[0])}.`
       : undefined,
     input.fitComparisonReport?.strongestFit
       ? `Pressure-test ${input.fitComparisonReport.strongestFit} against your real-life constraints before making it a default answer.`
@@ -287,6 +287,9 @@ function buildActions(input: {
   const strongestFit = input.fitComparisonReport?.strongestFit
   const needsMoreResearchOn = input.fitComparisonReport?.routeSignals?.needsMoreResearchOn ?? []
   const reports = input.destinationResearchReports
+  const reportsNeedingResearch = reports.filter((report) =>
+    needsMoreResearchOn.includes(report.destination)
+  )
   const actions: ActionItem[] = []
 
   if (input.planningMode === "clarityFirst") {
@@ -337,7 +340,7 @@ function buildActions(input: {
     actions.push(
       makeAction("research-gaps", {
         title: "Close the highest-risk unknowns",
-        description: `Verify the major open questions on ${joinHuman(needsMoreResearchOn.slice(0, 2))} before treating the shortlist as settled.`,
+        description: `Verify the major open questions on ${joinHuman(needsMoreResearchOn.slice(0, 2))} before treating the shortlist as settled. Start with ${summarizeResearchQuestions(reportsNeedingResearch) || "the visa path, city-level budget, and daily-life friction that could still change the decision"}.`,
         category: "research",
         phase: reports.length >= 2 ? "soon" : "now",
         urgency: "medium",
@@ -350,7 +353,7 @@ function buildActions(input: {
     actions.push(
       makeAction("prep-blockers", {
         title: "Work one readiness blocker at a time",
-        description: `Choose the most concrete blocker around ${sentenceFragment(input.readinessProfile.blockers[0])} and define the smallest useful next step that would reduce it.`,
+        description: `Choose the most concrete blocker first: ${blockerPriorityLine(input.readinessProfile.blockers[0])}. Then define the smallest useful step that would materially reduce it.`,
         category: "preparation",
         phase: input.readinessProfile.readinessLevel === "early" ? "soon" : "now",
         urgency: input.readinessProfile.readinessLevel === "nearlyReady" ? "high" : "medium",
@@ -479,6 +482,7 @@ function buildSequencingNotes(input: {
   clarityReport: ClarityReport
 }) {
   const notes = [
+    "Treat 'now' actions as decision-unblocking work, 'soon' actions as structured follow-through once the first blockers move, and 'later' actions as tasks that only matter after direction is more stable.",
     "Start with the actions that reduce uncertainty or unblock readiness first; leave detail-heavy execution tasks until that work is done.",
     input.destinationState === "shortlistUnstable"
       ? "Do not treat comparison as complete until the current shortlist tradeoffs have been pressure-tested against the same criteria."
@@ -513,6 +517,12 @@ function buildNotYet(input: {
     !input.fitComparisonReport?.routeSignals?.readyForActionPlanning
       ? "Do not interpret early planning as proof that every major unknown is resolved."
       : undefined,
+    input.fitComparisonReport?.strongestFit &&
+      input.fitComparisonReport.strongestPracticalFit &&
+      input.fitComparisonReport.strongestEmotionalFit &&
+      input.fitComparisonReport.strongestPracticalFit !== input.fitComparisonReport.strongestEmotionalFit
+      ? `Do not collapse the practical-vs-emotional split between ${input.fitComparisonReport.strongestPracticalFit} and ${input.fitComparisonReport.strongestEmotionalFit} too quickly.`
+      : undefined,
     "Do not treat this as legal, immigration, tax, or financial advice; use experts later where specialized guidance becomes necessary.",
   ]
 
@@ -537,7 +547,7 @@ function buildSuggestedNextMove(input: {
     input.fitComparisonReport?.routeSignals?.needsMoreResearchOn?.length &&
     !input.fitComparisonReport?.routeSignals?.readyForActionPlanning
   ) {
-    return `Research ${joinHuman(input.fitComparisonReport.routeSignals.needsMoreResearchOn.slice(0, 2))} more deeply before treating the shortlist as settled.`
+    return `Research ${joinHuman(input.fitComparisonReport.routeSignals.needsMoreResearchOn.slice(0, 2))} more deeply before treating the shortlist as settled or turning this into an execution plan.`
   }
 
   if (input.planningMode === "movePrep") {
@@ -549,6 +559,26 @@ function buildSuggestedNextMove(input: {
   }
 
   return "Use the Guide or Destination Research layers again if your direction still feels too loose for practical planning."
+}
+
+function blockerPriorityLine(blocker: string) {
+  const cleaned = stripTrailingPeriod(blocker)
+  return lowerFirst(cleaned)
+}
+
+function summarizeResearchQuestions(reports: DestinationResearchReport[]) {
+  const questions = uniqueStrings(
+    reports.flatMap((report) => report.recommendedNextQuestions.slice(0, 2)),
+  )
+
+  if (questions.length === 0) {
+    return ""
+  }
+
+  return questions
+    .slice(0, 2)
+    .map((question) => stripTrailingQuestionMark(lowerFirst(question)))
+    .join(" and ")
 }
 
 function requireArtifact<T>(value: T | undefined, label: string): T {
@@ -617,6 +647,14 @@ function joinHuman(items: string[]) {
   }
 
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`
+}
+
+function stripTrailingQuestionMark(value: string) {
+  return value.replace(/\?+$/g, "")
+}
+
+function stripTrailingPeriod(value: string) {
+  return value.replace(/\.+$/g, "")
 }
 
 function withIndefiniteArticle(value: string) {

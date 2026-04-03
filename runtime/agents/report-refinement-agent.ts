@@ -103,15 +103,6 @@ function refineReport(input: {
     input.readinessProfile,
   )
   const latestDestinations = input.destinationResearchReports.map((report) => report.destination)
-  const revisionType = determineRevisionType({
-    priorReport: input.priorReport,
-    userProfile: input.userProfile,
-    readinessProfile: input.readinessProfile,
-    destinationResearchReports: input.destinationResearchReports,
-    fitComparisonReport: input.fitComparisonReport,
-    actionPlan: input.actionPlan,
-    topPriorities,
-  })
   const changes = buildChanges({
     priorReport: input.priorReport,
     userProfile: input.userProfile,
@@ -120,6 +111,11 @@ function refineReport(input: {
     nonNegotiables,
     contradictionFlags,
     destinationResearchReports: input.destinationResearchReports,
+    fitComparisonReport: input.fitComparisonReport,
+    actionPlan: input.actionPlan,
+  })
+  const revisionType = determineRevisionType({
+    changes,
     fitComparisonReport: input.fitComparisonReport,
     actionPlan: input.actionPlan,
   })
@@ -381,27 +377,17 @@ function collectUpdatedSections(input: {
 }
 
 function determineRevisionType(input: {
-  priorReport: ClarityReport
-  userProfile?: UserProfile
-  readinessProfile: ReadinessProfile
-  destinationResearchReports: DestinationResearchReport[]
+  changes: ReportRevision["changes"]
   fitComparisonReport?: FitComparisonReport
   actionPlan?: ActionPlan
-  topPriorities: string[]
 }): RevisionType {
-  const prioritiesChanged = Boolean(
-    input.userProfile?.topPriorities?.length &&
-      !sameOrderedList(input.topPriorities, input.priorReport.topPriorities),
+  const prioritiesChanged = (input.changes.prioritiesChanged?.length ?? 0) > 0
+  const readinessChanged = (input.changes.readinessChanged?.length ?? 0) > 0
+  const destinationChanged = (input.changes.destinationsChanged?.length ?? 0) > 0
+  const shortlistChanged = Boolean(
+    input.fitComparisonReport && input.fitComparisonReport.strongestFit,
   )
-  const readinessChanged =
-    input.readinessProfile.readinessLevel !== input.priorReport.readinessProfile.readinessLevel ||
-    Math.abs(
-      input.readinessProfile.compositeScore - input.priorReport.readinessProfile.compositeScore,
-    ) >= 0.5
-  const shortlistChanged = Boolean(input.fitComparisonReport)
-  const planningChanged = Boolean(input.actionPlan)
-  const destinationChanged = input.destinationResearchReports.length > 0
-
+  const planningChanged = Boolean(input.actionPlan?.planningMode)
   const activeFlags = [
     prioritiesChanged,
     readinessChanged,
@@ -437,11 +423,17 @@ function determineSignificance(changes: ReportRevision["changes"]): RevisionSign
     changes.tensionsChanged?.length ?? 0,
   ]
   const total = counts.reduce((sum, count) => sum + count, 0)
+  const sectionsUpdated = changes.sectionsUpdated?.length ?? 0
 
-  if ((changes.prioritiesChanged?.length ?? 0) >= 3 || (changes.readinessChanged?.length ?? 0) >= 2 || total >= 8) {
+  if (
+    ((changes.prioritiesChanged?.length ?? 0) >= 3 &&
+      (changes.readinessChanged?.length ?? 0) >= 1) ||
+    (changes.readinessChanged?.length ?? 0) >= 3 ||
+    total >= 7
+  ) {
     return "major"
   }
-  if (total >= 3) {
+  if (total >= 2 || sectionsUpdated >= 3) {
     return "moderate"
   }
 
@@ -628,7 +620,7 @@ function buildRevisionSummary(input: {
       : undefined,
   ].filter(Boolean)
 
-  return `This ${input.significance} ${humanizeRevisionType(input.revisionType)} preserves the prior report's core direction while updating the sections affected by new context. ${changeBits.join(" ")}`
+  return `This ${input.significance} ${humanizeRevisionType(input.revisionType)} updates only the sections touched by the new context rather than reinterpreting the whole report. ${changeBits.join(" ")}`
 }
 
 function buildWhatChanged(input: {
@@ -643,10 +635,11 @@ function buildWhatChanged(input: {
     ...(input.changes.destinationsChanged ?? []),
     ...(input.changes.tensionsChanged ?? []),
     input.fitComparisonReport?.strongestFit
-      ? `${input.fitComparisonReport.strongestFit} is the current lead option, based on the existing comparison artifact.`
+      ? `${input.fitComparisonReport.strongestFit} is the current shortlist lead based on the existing comparison artifact.`
       : undefined,
-    input.actionPlan?.framingSummary,
-    input.actionPlan?.stageSummary,
+    input.actionPlan?.planningMode
+      ? `Planning is now being framed in ${input.actionPlan.planningMode} mode.`
+      : undefined,
     input.changes.readinessChanged?.length === 0
       ? `Readiness remains ${input.readinessProfile.readinessLevel}, so the revision stays pace-aware instead of pretending the move is suddenly immediate.`
       : undefined,
@@ -682,6 +675,7 @@ function buildStabilityNotes(input: {
     input.contradictionFlags.length === 0
       ? `No new contradiction layer was introduced in this revision.`
       : undefined,
+    `The report still preserves the original calm, bounded posture rather than turning new downstream artifacts into certainty claims.`,
   ]).slice(0, 5)
 }
 
@@ -695,7 +689,7 @@ function buildPayAttentionNow(input: {
 }) {
   return uniqueStrings([
     input.actionPlan?.actions[0]
-      ? `${input.actionPlan.actions[0].title}: ${input.actionPlan.actions[0].description}`
+      ? `${input.actionPlan.actions[0].title}: ${truncateSentence(input.actionPlan.actions[0].description, 180)}`
       : undefined,
     input.fitComparisonReport?.recommendedNextMove,
     input.destinationResearchReports[0]?.recommendedNextStep,
@@ -811,6 +805,14 @@ function sameOrderedList(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) =>
     toComparisonKey(value) === toComparisonKey(right[index])
   )
+}
+
+function truncateSentence(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value
+  }
+
+  return `${value.slice(0, maxLength - 3).trimEnd()}...`
 }
 
 function joinHuman(values: string[]) {

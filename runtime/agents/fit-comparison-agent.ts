@@ -116,16 +116,21 @@ function buildFitComparisonReport(input: {
     comparisonEntries,
   })
   const keyTradeoffs = collectKeyTradeoffs(comparisonEntries)
+  const needsMoreResearchOn = comparisonEntries
+    .filter((entry) => requiresMoreResearch(entry))
+    .map((entry) => entry.destination)
   const recommendedNextMove = buildRecommendedNextMove({
     readinessProfile: input.readinessProfile,
     strongestFit,
     strongestPracticalFit,
     strongestEmotionalFit,
     comparisonEntries,
+    needsMoreResearchOn,
   })
-  const needsMoreResearchOn = comparisonEntries
-    .filter((entry) => entry.fitVerdict === "tooEarlyToJudge" || entry.confidence === "low")
-    .map((entry) => entry.destination)
+  const emotionalPracticalSplit =
+    Boolean(strongestPracticalFit) &&
+    Boolean(strongestEmotionalFit) &&
+    strongestPracticalFit !== strongestEmotionalFit
 
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -146,7 +151,8 @@ function buildFitComparisonReport(input: {
       readyForActionPlanning:
         Boolean(strongestFit) &&
         input.readinessProfile.readinessLevel !== "early" &&
-        needsMoreResearchOn.length === 0,
+        needsMoreResearchOn.length === 0 &&
+        !emotionalPracticalSplit,
     },
   }
 }
@@ -182,9 +188,9 @@ function buildComparisonEntry(input: {
   ]).slice(0, 4)
   const tradeoffs = uniqueStrings(input.report.fitNotes.majorTradeoffs).slice(0, 3)
   const notes = uniqueStrings([
-    `Practical fit reads as ${humanizeVerdict(practicalFit)} for this profile.`,
+    `Practical fit reads as ${humanizeVerdict(practicalFit)} because the current research on budget, systems, visa practicality, and family/work logistics is ${practicalFit === "strongFit" ? "holding up reasonably well" : "still carrying meaningful friction"}.`,
     `Emotional fit reads as ${humanizeVerdict(emotionalFit)} based on belonging, climate, pace, and culture signals already present in the research.`,
-    `Current-stage fit reads as ${humanizeVerdict(currentStageFit)} for ${withIndefiniteArticle(input.readinessProfile.readinessLevel)} readiness profile.`,
+    `Current-stage fit reads as ${humanizeVerdict(currentStageFit)} for ${withIndefiniteArticle(input.readinessProfile.readinessLevel)} readiness profile, which matters because attractive destinations can still be mistimed.`,
     nonNegotiableStatus === "conflict"
       ? "One or more non-negotiables appear under pressure in the current research and should be verified before narrowing."
       : nonNegotiableStatus === "watch"
@@ -433,11 +439,19 @@ function buildComparisonSummary(input: {
       ? `${weakestFitEntry.destination} currently carries the most pressure from ${joinHuman(weakestFitEntry.tensions.slice(0, 2)) || "practical friction"}, so it reads as the weakest current fit.`
       : ""
 
-  return `${practicalVsEmotionalSplit} This pass compares the shortlist through ${priorityFrame}. ${readinessFrame} ${weakestFrame}`.trim()
+  const researchFrame = input.comparisonEntries.some((entry) => requiresMoreResearch(entry))
+    ? "At least one option still has enough uncertainty that shortlist narrowing should stay provisional."
+    : "The current evidence is strong enough to support a practical narrowing move rather than another fully open-ended research loop."
+
+  return `${practicalVsEmotionalSplit} This pass compares the shortlist through ${priorityFrame}. ${readinessFrame} ${researchFrame} ${weakestFrame}`.trim()
 }
 
 function collectKeyTradeoffs(entries: DestinationComparisonEntry[]) {
-  return uniqueStrings(entries.flatMap((entry) => entry.tradeoffs)).slice(0, 6)
+  const emotionalVsPracticalTradeoff = findEmotionalPracticalTradeoff(entries)
+  return uniqueStrings([
+    emotionalVsPracticalTradeoff,
+    ...entries.flatMap((entry) => entry.tradeoffs),
+  ]).slice(0, 6)
 }
 
 function buildRecommendedNextMove(input: {
@@ -446,13 +460,10 @@ function buildRecommendedNextMove(input: {
   strongestPracticalFit?: string
   strongestEmotionalFit?: string
   comparisonEntries: DestinationComparisonEntry[]
+  needsMoreResearchOn: string[]
 }) {
-  const destinationsNeedingVerification = input.comparisonEntries
-    .filter((entry) => entry.nonNegotiableStatus !== "clear" || entry.confidence === "low")
-    .map((entry) => entry.destination)
-
   if (!input.strongestFit) {
-    return "Do one more research pass on the missing pressure points before trying to narrow the shortlist."
+    return `Do one more comparison pass focused on the unresolved pressure points in ${joinHuman(input.needsMoreResearchOn.slice(0, 2)) || "the current shortlist"} before trying to force a winner.`
   }
 
   if (
@@ -460,14 +471,18 @@ function buildRecommendedNextMove(input: {
     input.strongestEmotionalFit &&
     input.strongestPracticalFit !== input.strongestEmotionalFit
   ) {
-    return `Pressure-test ${input.strongestPracticalFit} against ${input.strongestEmotionalFit} on the exact tradeoff that matters most to you now, then decide whether current practicality or felt belonging should lead this phase.`
+    return `Pressure-test ${input.strongestPracticalFit} against ${input.strongestEmotionalFit} on the exact tradeoff that matters most to you now, then decide whether this phase should be led by current practicality or lived belonging.`
+  }
+
+  if (input.needsMoreResearchOn.length > 0) {
+    return `Keep ${input.strongestFit} as the lead option for now, but verify the highest-risk open questions on ${joinHuman(input.needsMoreResearchOn.slice(0, 2))} before treating the shortlist as planning-ready.`
   }
 
   if (input.readinessProfile.readinessLevel === "early" || input.readinessProfile.readinessLevel === "emerging") {
-    return `Keep ${input.strongestFit} as the lead option for now, but use the next pass to verify ${joinHuman(destinationsNeedingVerification.slice(0, 2)) || "the major visa, budget, and belonging assumptions"} before moving into action planning.`
+    return `Keep ${input.strongestFit} as the working lead, but use action planning only for provisional sequencing while the shortlist stays flexible.`
   }
 
-  return `Use ${input.strongestFit} as the working lead and translate the comparison into a practical shortlist plan, while verifying ${joinHuman(destinationsNeedingVerification.slice(0, 2)) || "the remaining open questions"} before acting.`
+  return `Use ${input.strongestFit} as the working lead and translate the comparison into a practical shortlist plan rather than another broad research loop.`
 }
 
 function findPriorityEvidence(priority: string, report: DestinationResearchReport) {
@@ -522,7 +537,7 @@ function buildReadinessTension(
   }
 
   if (containsAny(report.recommendedNextStep, ["city", "consular", "eligibility", "housing"])) {
-    return [
+  return [
       `${report.destination} may fit later, but it still asks for a more organized prep pass than this readiness stage may comfortably support.`,
     ]
   }
@@ -542,6 +557,32 @@ function buildNonNegotiableTension(
   return [
     `${report.destination} needs a tighter check against ${joinHuman(nonNegotiables.slice(0, 2))} before it can be treated as a clean shortlist option.`,
   ]
+}
+
+function requiresMoreResearch(entry: DestinationComparisonEntry) {
+  return (
+    entry.fitVerdict === "tooEarlyToJudge" ||
+    entry.confidence === "low" ||
+    entry.nonNegotiableStatus !== "clear" ||
+    entry.currentStageFit === "tooEarlyToJudge"
+  )
+}
+
+function findEmotionalPracticalTradeoff(entries: DestinationComparisonEntry[]) {
+  const strongestPractical = [...entries]
+    .sort((left, right) => verdictToPoints(right.practicalFit) - verdictToPoints(left.practicalFit))[0]
+  const strongestEmotional = [...entries]
+    .sort((left, right) => verdictToPoints(right.emotionalFit) - verdictToPoints(left.emotionalFit))[0]
+
+  if (
+    !strongestPractical ||
+    !strongestEmotional ||
+    strongestPractical.destination === strongestEmotional.destination
+  ) {
+    return undefined
+  }
+
+  return `${strongestPractical.destination} looks stronger on current practicality, while ${strongestEmotional.destination} carries more emotional pull.`
 }
 
 function pickDestination(

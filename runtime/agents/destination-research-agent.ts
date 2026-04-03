@@ -335,17 +335,32 @@ function buildQuickFitSummary(input: {
   knowledge?: DestinationKnowledge
 }) {
   const verdictLabel = humanizeVerdict(input.profileFitVerdict)
-  const priorities = joinHuman(input.priorities.slice(0, 3))
+  const matchedPriority =
+    input.knowledge &&
+    input.priorities.find((priority) =>
+      matchesDestinationPriority(priority, input.knowledge!.priorityFits)
+    )
+  const pressurePoint =
+    input.knowledge &&
+    input.priorities.find((priority) =>
+      matchesDestinationPriority(priority, input.knowledge!.priorityTensions)
+    )
   const budgetLine =
     input.budgetAssessment.status === "comfortable"
-      ? "The stated budget looks broadly workable for a first-pass shortlist."
+      ? "The stated budget looks broadly workable for a serious first-pass shortlist."
       : input.budgetAssessment.status === "stretch"
-        ? "The stated budget looks possible but tight unless city choice stays disciplined."
+        ? "The stated budget looks possible but only if city choice, housing expectations, and setup costs stay disciplined."
         : input.budgetAssessment.status === "unknown"
           ? "Budget fit is still too under-specified to treat as settled."
           : "The stated budget looks misaligned unless your expectations or city choice change."
+  const fitFrame = matchedPriority
+    ? `${input.destinationName} reads as a ${verdictLabel} largely because it supports ${matchedPriority} for this profile.`
+    : `${input.destinationName} reads as a ${verdictLabel} based on the current profile filters rather than generic popularity.`
+  const cautionLine = pressurePoint
+    ? `The main pressure point is ${pressurePoint}, so this should stay a research verdict rather than a commitment verdict.`
+    : "The main question is whether the strongest apparent fit still holds once the practical details are verified."
 
-  return `${input.destinationName} reads as a ${verdictLabel} for this profile because the main filter is ${priorities || "your top priorities"}, not generic popularity. ${budgetLine} Readiness is currently ${input.readinessProfile.readinessLevel}, so this should be used as narrowing research rather than false certainty.`
+  return `${fitFrame} ${budgetLine} ${cautionLine} Readiness is currently ${input.readinessProfile.readinessLevel}, so this should be used for narrowing and pressure-testing, not false certainty.`
 }
 
 function buildWhyItMayFit(input: {
@@ -379,7 +394,11 @@ function buildWhyItMayFit(input: {
   }
 
   if (input.budgetAssessment.status === "comfortable") {
-    items.push("The current monthly budget looks capable of supporting a serious first-pass exploration.")
+    items.push("The current monthly budget looks capable of supporting a serious first-pass exploration without every decision needing to be made from a scarcity position.")
+  }
+
+  if (input.budgetAssessment.status === "stretch") {
+    items.push("The current budget can still keep the destination in play, but only if the eventual city and housing standard are chosen carefully.")
   }
 
   items.push(
@@ -422,6 +441,15 @@ function buildWhyItMayNotFit(input: {
     items.push(input.knowledge.profileCautions[input.userProfile.profileType]!)
   }
 
+  const lowConfidenceSections = Object.entries(input.knowledge?.sections ?? {})
+    .filter(([, section]) => section?.confidence === "low")
+    .map(([key]) => humanizeSectionKey(key))
+  if (lowConfidenceSections.length > 0) {
+    items.push(
+      `The thinnest parts of the current evidence are ${joinHuman(lowConfidenceSections.slice(0, 2))}, so those areas should not be treated as settled.`,
+    )
+  }
+
   if (input.readinessProfile.readinessLevel === "early") {
     items.push("Your readiness is still early, so destination enthusiasm could outpace practical preparation.")
   }
@@ -444,8 +472,10 @@ function buildTradeoffs(input: {
   const items: string[] = []
 
   if (input.knowledge?.priorityTensions.length) {
+    const matchedFits = input.knowledge.priorityFits.slice(0, 2)
+    const matchedTensions = input.knowledge.priorityTensions.slice(0, 2)
     items.push(
-      `The likely tradeoff is between ${joinHuman(input.knowledge.priorityFits.slice(0, 2))} and ${joinHuman(input.knowledge.priorityTensions.slice(0, 2))}.`,
+      `The likely tradeoff is between ${joinHuman(matchedFits)} and ${joinHuman(matchedTensions)}.`,
     )
   }
 
@@ -455,6 +485,8 @@ function buildTradeoffs(input: {
 
   if (input.userProfile.profileType === "family") {
     items.push("Family fit is likely to hinge on school-and-neighborhood reality rather than country-level appeal.")
+  } else if (input.userProfile.profileType === "digitalNomad") {
+    items.push("Remote-work viability may look attractive on paper while visa structure, tax exposure, and admin friction still need a separate reality check.")
   }
 
   if (input.readinessProfile.readinessLevel === "nearlyReady") {
@@ -472,10 +504,18 @@ function buildNextQuestions(input: {
   budgetAssessment: BudgetAssessment
 }) {
   const items = [
-    `Which city or region in ${input.destinationName} actually fits ${joinHuman(input.priorities.slice(0, 3)) || "this profile"} best?`,
-    `What official residency route applies to a ${humanizeProfileType(input.userProfile.profileType)} profile with this income situation?`,
-    `What housing budget should be assumed if you prioritize ${joinHuman(input.priorities.slice(0, 2)) || "your top criteria"} rather than bargain hunting?`,
+    `Which city or region in ${input.destinationName} actually fits ${joinHuman(input.priorities.slice(0, 3)) || "this profile"} best once you compare daily life, housing, and admin friction together?`,
+    `Which official residency route looks most realistic for a ${humanizeProfileType(input.userProfile.profileType)} profile with this income pattern and timeline?`,
+    `What housing budget should be assumed if you prioritize ${joinHuman(input.priorities.slice(0, 2)) || "your top criteria"} rather than bargain-hunting edge cases?`,
   ]
+
+  if (input.priorities.some((priority) => includesAny(priority, ["belong", "racial", "social", "community"]))) {
+    items.push(`Which neighborhoods or cities in ${input.destinationName} are most likely to feel socially sustainable rather than just affordable or scenic?`)
+  }
+
+  if (input.priorities.some((priority) => includesAny(priority, ["safety", "stable", "infrastructure"]))) {
+    items.push(`Which city-level safety and infrastructure differences matter enough in ${input.destinationName} to change the shortlist outcome?`)
+  }
 
   if ((input.userProfile.partySize?.children ?? 0) > 0) {
     items.push(`Which school options keep the family budget realistic in your likely target cities?`)
@@ -503,6 +543,10 @@ function buildRecommendedNextStep(
 
   if (readinessProfile.readinessLevel === "early") {
     return `Use ${destinationName} as a pressure-test destination for your criteria, not as a commitment decision yet.`
+  }
+
+  if (readinessProfile.readinessLevel === "emerging") {
+    return `Use a second-pass review on ${destinationName} to narrow the big unknowns first: visa route fit, realistic city-level cost, and whether the strongest profile match survives closer inspection.`
   }
 
   return `Run a second-pass review on ${destinationName} that verifies residency eligibility, realistic city-level budget, and the top one or two profile priorities driving this move.`
@@ -744,9 +788,22 @@ function integrationNote(userProfile: UserProfile, knowledge?: DestinationKnowle
 
 function combineConfidence(levels: Array<ConfidenceLevel | undefined>): ConfidenceLevel {
   const ranked = levels.filter(Boolean)
-  if (ranked.some((level) => level === "low")) return "low"
-  if (ranked.some((level) => level === "medium")) return "medium"
+  const lowCount = ranked.filter((level) => level === "low").length
+  const mediumCount = ranked.filter((level) => level === "medium").length
+
+  if (lowCount >= 2) return "low"
+  if (lowCount >= 1 || mediumCount >= 1) return "medium"
   return "high"
+}
+
+function humanizeSectionKey(key: string) {
+  if (key === "visaImmigration") return "visa and immigration"
+  if (key === "costOfLiving") return "cost of living"
+  if (key === "climateEnvironment") return "climate and environment"
+  if (key === "taxImplications") return "tax implications"
+  if (key === "cultureIntegration") return "culture and integration"
+  if (key === "practicalNextSteps") return "practical next steps"
+  return key
 }
 
 function matchesDestinationPriority(priority: string, candidateKeywords: string[]) {
