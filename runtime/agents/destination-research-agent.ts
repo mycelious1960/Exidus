@@ -165,6 +165,7 @@ function buildDestinationResearchReport(input: {
     budgetAssessment,
     readinessProfile: input.readinessProfile,
     userProfile: input.userProfile,
+    priorities,
   })
   const sections = buildSections({
     destinationName,
@@ -175,6 +176,7 @@ function buildDestinationResearchReport(input: {
     readinessProfile: input.readinessProfile,
   })
   const confidence = combineConfidence(Object.values(sections).map((section) => section?.confidence))
+  const lowConfidenceSections = collectLowConfidenceSections(sections)
   const quickFitSummary = buildQuickFitSummary({
     destinationName,
     profileFitVerdict,
@@ -182,6 +184,8 @@ function buildDestinationResearchReport(input: {
     budgetAssessment,
     readinessProfile: input.readinessProfile,
     knowledge,
+    confidence,
+    lowConfidenceSections,
   })
   const recommendedNextQuestions = buildNextQuestions({
     destinationName,
@@ -189,11 +193,16 @@ function buildDestinationResearchReport(input: {
     userProfile: input.userProfile,
     priorities,
     budgetAssessment,
+    lowConfidenceSections,
   })
   const recommendedNextStep = buildRecommendedNextStep(
     destinationName,
     input.readinessProfile,
     knowledge,
+    confidence,
+    lowConfidenceSections,
+    input.userProfile,
+    priorities,
   )
 
   return {
@@ -333,6 +342,8 @@ function buildQuickFitSummary(input: {
   budgetAssessment: BudgetAssessment
   readinessProfile: ReadinessProfile
   knowledge?: DestinationKnowledge
+  confidence: ConfidenceLevel
+  lowConfidenceSections: string[]
 }) {
   const verdictLabel = humanizeVerdict(input.profileFitVerdict)
   const matchedPriority =
@@ -359,8 +370,14 @@ function buildQuickFitSummary(input: {
   const cautionLine = pressurePoint
     ? `The main pressure point is ${pressurePoint}, so this should stay a research verdict rather than a commitment verdict.`
     : "The main question is whether the strongest apparent fit still holds once the practical details are verified."
+  const confidenceLine =
+    input.confidence === "high"
+      ? "Overall confidence is relatively high for a bounded first pass, though official verification still matters before acting."
+      : input.lowConfidenceSections.length > 0
+        ? `Overall confidence is ${input.confidence} because ${joinHuman(input.lowConfidenceSections.slice(0, 2))} is still the thinnest part of the current evidence.`
+        : `Overall confidence is ${input.confidence} because some important destination details still need verification before this becomes planning-grade evidence.`
 
-  return `${fitFrame} ${budgetLine} ${cautionLine} Readiness is currently ${input.readinessProfile.readinessLevel}, so this should be used for narrowing and pressure-testing, not false certainty.`
+  return `${fitFrame} ${budgetLine} ${cautionLine} ${confidenceLine} Readiness is currently ${input.readinessProfile.readinessLevel}, so this should be used for narrowing and pressure-testing, not false certainty.`
 }
 
 function buildWhyItMayFit(input: {
@@ -468,6 +485,7 @@ function buildTradeoffs(input: {
   budgetAssessment: BudgetAssessment
   readinessProfile: ReadinessProfile
   userProfile: UserProfile
+  priorities?: string[]
 }) {
   const items: string[] = []
 
@@ -489,6 +507,18 @@ function buildTradeoffs(input: {
     items.push("Remote-work viability may look attractive on paper while visa structure, tax exposure, and admin friction still need a separate reality check.")
   }
 
+  const emotionalPriority = input.priorities?.find((priority) =>
+    includesAny(priority, ["belong", "community", "social", "warm", "climate", "pace"])
+  )
+  const practicalTension = input.knowledge?.priorityTensions.find((tension) =>
+    includesAny(tension, ["bureaucr", "housing", "tax", "infrastructure", "safety", "cost"])
+  )
+  if (emotionalPriority && practicalTension) {
+    items.push(
+      `${emotionalPriority} may be part of the pull here, but the price of getting it could be more ${practicalTension} than the first-pass appeal suggests.`,
+    )
+  }
+
   if (input.readinessProfile.readinessLevel === "nearlyReady") {
     items.push("Because readiness is relatively advanced, the cost of bad assumptions is higher now than it was during earlier exploration.")
   }
@@ -502,12 +532,47 @@ function buildNextQuestions(input: {
   userProfile: UserProfile
   priorities: string[]
   budgetAssessment: BudgetAssessment
+  lowConfidenceSections: string[]
 }) {
-  const items = [
+  const items: string[] = [
     `Which city or region in ${input.destinationName} actually fits ${joinHuman(input.priorities.slice(0, 3)) || "this profile"} best once you compare daily life, housing, and admin friction together?`,
-    `Which official residency route looks most realistic for a ${humanizeProfileType(input.userProfile.profileType)} profile with this income pattern and timeline?`,
-    `What housing budget should be assumed if you prioritize ${joinHuman(input.priorities.slice(0, 2)) || "your top criteria"} rather than bargain-hunting edge cases?`,
   ]
+
+  if (input.lowConfidenceSections.includes("visa and immigration")) {
+    items.push(
+      `Which official residency route looks most realistic for a ${humanizeProfileType(input.userProfile.profileType)} profile with this income pattern and timeline?`,
+    )
+  }
+
+  items.push(
+    `What housing budget should be assumed if you prioritize ${joinHuman(input.priorities.slice(0, 2)) || "your top criteria"} rather than bargain-hunting edge cases?`,
+  )
+
+  if (
+    input.lowConfidenceSections.includes("tax implications") &&
+    (input.userProfile.profileType === "digitalNomad" ||
+      includesAny(input.userProfile.specialNotes?.join(" ") ?? "", ["self-employed", "remote", "contract"]))
+  ) {
+    items.push(
+      `What tax-residency and foreign-income questions would need specialist review before ${input.destinationName} could move from attractive to actionable?`,
+    )
+  }
+
+  if (
+    input.lowConfidenceSections.includes("healthcare") &&
+    input.priorities.some((priority) => includesAny(priority, ["health", "medical", "family"]))
+  ) {
+    items.push(
+      `What does dependable healthcare access actually look like in your likely target cities, including the private-versus-public tradeoff?`,
+    )
+  }
+
+  if (
+    input.lowConfidenceSections.includes("education") ||
+    (input.userProfile.partySize?.children ?? 0) > 0
+  ) {
+    items.push(`Which school options keep the family budget realistic in your likely target cities?`)
+  }
 
   if (input.priorities.some((priority) => includesAny(priority, ["belong", "racial", "social", "community"]))) {
     items.push(`Which neighborhoods or cities in ${input.destinationName} are most likely to feel socially sustainable rather than just affordable or scenic?`)
@@ -515,10 +580,6 @@ function buildNextQuestions(input: {
 
   if (input.priorities.some((priority) => includesAny(priority, ["safety", "stable", "infrastructure"]))) {
     items.push(`Which city-level safety and infrastructure differences matter enough in ${input.destinationName} to change the shortlist outcome?`)
-  }
-
-  if ((input.userProfile.partySize?.children ?? 0) > 0) {
-    items.push(`Which school options keep the family budget realistic in your likely target cities?`)
   }
 
   if (input.budgetAssessment.status !== "comfortable") {
@@ -536,9 +597,26 @@ function buildRecommendedNextStep(
   destinationName: string,
   readinessProfile: ReadinessProfile,
   knowledge?: DestinationKnowledge,
+  confidence?: ConfidenceLevel,
+  lowConfidenceSections: string[] = [],
+  userProfile?: UserProfile,
+  priorities: string[] = [],
 ) {
   if (!knowledge) {
     return `Treat ${destinationName} as a manual-research candidate next. Verify immigration, cost, and city-level fit from official sources before using it in comparison.`
+  }
+
+  const prioritySensitiveUnknowns = lowConfidenceSections.filter((section) =>
+    section === "visa and immigration" ||
+    section === "healthcare" ||
+    section === "education" ||
+    (section === "tax implications" &&
+      (userProfile?.profileType === "digitalNomad" ||
+        priorities.some((priority) => includesAny(priority, ["work", "remote", "self-employed"]))))
+  )
+
+  if (confidence === "low" || prioritySensitiveUnknowns.length > 0) {
+    return `Keep ${destinationName} in the shortlist only as a directional candidate for now. Route the next pass back into destination research on ${joinHuman(prioritySensitiveUnknowns.slice(0, 2)) || joinHuman(lowConfidenceSections.slice(0, 2)) || "the thinnest evidence areas"} before treating it as planning-ready or a commitment call.`
   }
 
   if (readinessProfile.readinessLevel === "early") {
@@ -794,6 +872,14 @@ function combineConfidence(levels: Array<ConfidenceLevel | undefined>): Confiden
   if (lowCount >= 2) return "low"
   if (lowCount >= 1 || mediumCount >= 1) return "medium"
   return "high"
+}
+
+function collectLowConfidenceSections(
+  sections: DestinationResearchReport["sections"],
+) {
+  return Object.entries(sections)
+    .filter(([, section]) => section?.confidence === "low")
+    .map(([key]) => humanizeSectionKey(key))
 }
 
 function humanizeSectionKey(key: string) {

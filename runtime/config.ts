@@ -30,7 +30,11 @@ export function getRuntimeConfig(): ExidusRuntimeConfig {
   const repoRoot = path.resolve(CURRENT_DIR, "..")
   const docsRoot = resolveDocsRoot(repoRoot)
   const agenticDocsRoot = path.join(docsRoot, "Agentic")
-  const dataRoot = resolvePathFromEnv("EXIDUS_DATA_ROOT", path.join(repoRoot, ".data"))
+  const dataRoot = resolvePathFromEnv(
+    "EXIDUS_DATA_ROOT",
+    path.join(repoRoot, ".data"),
+    repoRoot,
+  )
 
   cachedConfig = {
     repoRoot,
@@ -41,8 +45,13 @@ export function getRuntimeConfig(): ExidusRuntimeConfig {
     manifestPath: resolvePathFromEnv(
       "EXIDUS_MANIFEST_PATH",
       path.join(agenticDocsRoot, "Exidus Agent Manifest v1.json"),
+      repoRoot,
     ),
-    publicDir: resolvePathFromEnv("EXIDUS_PUBLIC_DIR", path.join(repoRoot, "app", "public")),
+    publicDir: resolvePathFromEnv(
+      "EXIDUS_PUBLIC_DIR",
+      path.join(repoRoot, "app", "public"),
+      repoRoot,
+    ),
     host: process.env.HOST?.trim() || "127.0.0.1",
     port: parsePort(process.env.PORT),
     runtimeEnv: process.env.EXIDUS_RUNTIME_ENV?.trim() || process.env.NODE_ENV?.trim() || "development",
@@ -67,6 +76,10 @@ export function describeRuntimeConfig() {
   }
 }
 
+export function resetRuntimeConfigCache() {
+  cachedConfig = undefined
+}
+
 function resolveDocsRoot(repoRoot: string) {
   const override = process.env.EXIDUS_DOCS_ROOT?.trim()
   if (override) {
@@ -81,7 +94,7 @@ function resolveDocsRoot(repoRoot: string) {
   return siblingDocsRoot
 }
 
-function resolvePathFromEnv(name: string, fallback: string, baseDir = CURRENT_DIR) {
+function resolvePathFromEnv(name: string, fallback: string, baseDir: string) {
   const value = process.env[name]?.trim()
   if (!value) {
     return fallback

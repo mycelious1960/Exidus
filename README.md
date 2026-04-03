@@ -22,6 +22,7 @@ npm run dev
 Useful inspection commands:
 
 ```bash
+npm run test:runtime
 npm run inspect:config
 npm run inspect:startup
 npm run inspect:runtime
@@ -60,6 +61,7 @@ That is enough to run the app in a container or basic Node host without locking 
 Use this sequence when you want to validate the packaged runtime before real hosting:
 
 ```bash
+npm run test:runtime
 npm run inspect:config
 npm run inspect:startup
 npm run inspect:runtime

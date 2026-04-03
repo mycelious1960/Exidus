@@ -22,6 +22,9 @@ interface DestinationComparisonEntry {
   practicalFit: FitVerdict
   emotionalFit: FitVerdict
   currentStageFit: FitVerdict
+  practicalPoints: number
+  emotionalPoints: number
+  currentStagePoints: number
   nonNegotiableStatus: NonNegotiableStatus
   strengths: string[]
   tensions: string[]
@@ -35,6 +38,7 @@ interface ComparisonScorecard {
   emotionalPoints: number
   currentStagePoints: number
   nonNegotiablePenalty: number
+  confidencePenalty: number
   overallPoints: number
 }
 
@@ -188,9 +192,9 @@ function buildComparisonEntry(input: {
   ]).slice(0, 4)
   const tradeoffs = uniqueStrings(input.report.fitNotes.majorTradeoffs).slice(0, 3)
   const notes = uniqueStrings([
-    `Practical fit reads as ${humanizeVerdict(practicalFit)} because the current research on budget, systems, visa practicality, and family/work logistics is ${practicalFit === "strongFit" ? "holding up reasonably well" : "still carrying meaningful friction"}.`,
-    `Emotional fit reads as ${humanizeVerdict(emotionalFit)} based on belonging, climate, pace, and culture signals already present in the research.`,
-    `Current-stage fit reads as ${humanizeVerdict(currentStageFit)} for ${withIndefiniteArticle(input.readinessProfile.readinessLevel)} readiness profile, which matters because attractive destinations can still be mistimed.`,
+    `Practical fit reads as ${humanizeVerdict(practicalFit)} because ${summarizePracticalDrivers(input.report, input.topPriorities, practicalFit)}.`,
+    `Emotional fit reads as ${humanizeVerdict(emotionalFit)} because ${summarizeEmotionalDrivers(input.report, input.topPriorities, emotionalFit)}.`,
+    `Current-stage fit reads as ${humanizeVerdict(currentStageFit)} for ${withIndefiniteArticle(input.readinessProfile.readinessLevel)} readiness profile because ${summarizeStageDrivers(input.report, input.readinessProfile, currentStageFit)}.`,
     nonNegotiableStatus === "conflict"
       ? "One or more non-negotiables appear under pressure in the current research and should be verified before narrowing."
       : nonNegotiableStatus === "watch"
@@ -204,6 +208,9 @@ function buildComparisonEntry(input: {
     practicalFit,
     emotionalFit,
     currentStageFit,
+    practicalPoints,
+    emotionalPoints,
+    currentStagePoints,
     nonNegotiableStatus,
     strengths,
     tensions,
@@ -219,7 +226,7 @@ function scorePracticalFit(
   readinessProfile: ReadinessProfile,
   userProfile: UserProfile,
 ) {
-  let points = verdictToPoints(report.profileFitVerdict)
+  let points = startingPoints(report.profileFitVerdict)
 
   if (priorityMatches(priorities, ["afford", "budget", "cost"])) {
     points += sectionConfidenceBonus(report.sections.costOfLiving?.confidence)
@@ -234,13 +241,24 @@ function scorePracticalFit(
 
   if (priorityMatches(priorities, ["safety", "stable", "system", "infrastructure"])) {
     points += sectionConfidenceBonus(report.sections.safety?.confidence)
-    if (containsAny(report.sections.safety?.summary, ["regional variation", "petty theft", "risk"])) {
+    if (
+      containsAny(report.sections.safety?.summary, ["regional variation", "petty theft", "risk"]) ||
+      containsAny(report.fitNotes.majorTradeoffs.join(" "), ["infrastructure", "regional safety variance"])
+    ) {
       points -= 1
     }
   }
 
   if (priorityMatches(priorities, ["family", "school", "education"]) || (userProfile.partySize?.children ?? 0) > 0) {
     points += report.sections.education ? sectionConfidenceBonus(report.sections.education.confidence) : -1
+  }
+
+  if (priorityMatches(priorities, ["english", "language"])) {
+    if (containsAny(report.sections.cultureIntegration?.summary, ["english is workable", "english is a practical advantage"])) {
+      points += 1
+    } else if (containsAny(report.sections.cultureIntegration?.summary, ["language acquisition", "spanish", "portuguese"])) {
+      points -= 1
+    }
   }
 
   if (readinessProfile.readinessLevel === "early" || readinessProfile.readinessLevel === "emerging") {
@@ -253,7 +271,13 @@ function scorePracticalFit(
     points -= 1
   }
 
-  return clampPoints(points)
+  if (report.confidence === "low") {
+    points -= 2
+  } else if (report.confidence === "medium") {
+    points -= 1
+  }
+
+  return points
 }
 
 function scoreEmotionalFit(
@@ -261,7 +285,7 @@ function scoreEmotionalFit(
   priorities: string[],
   archetypeProfile: ArchetypeProfile,
 ) {
-  let points = verdictToPoints(report.profileFitVerdict)
+  let points = startingPoints(report.profileFitVerdict)
 
   if (priorityMatches(priorities, ["belong", "community", "culture", "integration"])) {
     points += sectionConfidenceBonus(report.sections.cultureIntegration?.confidence)
@@ -279,10 +303,25 @@ function scoreEmotionalFit(
     points -= 1
   }
 
+  if (priorityMatches(priorities, ["english", "language"])) {
+    if (
+      containsAny(report.sections.cultureIntegration?.summary, ["diaspora", "belonging"]) ||
+      containsAny(report.sections.cultureIntegration?.notes.join(" "), ["english is a practical advantage", "english-language comfort"])
+    ) {
+      points += 1
+    } else if (containsAny(report.sections.cultureIntegration?.notes.join(" "), ["spanish", "portuguese"])) {
+      points -= 1
+    }
+  }
+
   if (
     archetypeProfile.primaryLifeArchetype === "belongingFirst" &&
     containsAny(report.sections.cultureIntegration?.summary, ["welcoming", "socially warm", "belonging"])
   ) {
+    points += 1
+  }
+
+  if (containsAny(report.sections.cultureIntegration?.summary, ["diaspora"])) {
     points += 1
   }
 
@@ -293,14 +332,18 @@ function scoreEmotionalFit(
     points += 1
   }
 
-  return clampPoints(points)
+  if (report.confidence === "low") {
+    points -= 1
+  }
+
+  return points
 }
 
 function scoreCurrentStageFit(
   report: DestinationResearchReport,
   readinessProfile: ReadinessProfile,
 ) {
-  let points = verdictToPoints(report.profileFitVerdict)
+  let points = startingPoints(report.profileFitVerdict)
 
   if (readinessProfile.readinessLevel === "early") {
     if (containsAny(report.recommendedNextStep, ["structured next pass", "shortlist two cities"])) {
@@ -321,7 +364,11 @@ function scoreCurrentStageFit(
     points -= Math.min(1, readinessProfile.blockers.length)
   }
 
-  return clampPoints(points)
+  if (report.confidence === "low") {
+    points -= 1
+  }
+
+  return points
 }
 
 function scoreNonNegotiables(nonNegotiables: string[], report: DestinationResearchReport) {
@@ -383,13 +430,19 @@ function scoreNonNegotiables(nonNegotiables: string[], report: DestinationResear
 }
 
 function scoreComparisonEntry(entry: DestinationComparisonEntry): ComparisonScorecard {
-  const practicalPoints = verdictToPoints(entry.practicalFit)
-  const emotionalPoints = verdictToPoints(entry.emotionalFit)
-  const currentStagePoints = verdictToPoints(entry.currentStageFit)
+  const practicalPoints = entry.practicalPoints
+  const emotionalPoints = entry.emotionalPoints
+  const currentStagePoints = entry.currentStagePoints
   const nonNegotiablePenalty =
     entry.nonNegotiableStatus === "conflict"
       ? 2
       : entry.nonNegotiableStatus === "watch"
+        ? 1
+        : 0
+  const confidencePenalty =
+    entry.confidence === "low"
+      ? 2
+      : entry.confidence === "medium"
         ? 1
         : 0
 
@@ -398,11 +451,13 @@ function scoreComparisonEntry(entry: DestinationComparisonEntry): ComparisonScor
     emotionalPoints,
     currentStagePoints,
     nonNegotiablePenalty,
+    confidencePenalty,
     overallPoints:
       practicalPoints * 2 +
       emotionalPoints +
       currentStagePoints -
-      nonNegotiablePenalty,
+      nonNegotiablePenalty -
+      confidencePenalty,
   }
 }
 
@@ -422,7 +477,11 @@ function buildComparisonSummary(input: {
     input.strongestPracticalFit &&
     input.strongestEmotionalFit &&
     input.strongestPracticalFit !== input.strongestEmotionalFit
-      ? `${input.strongestPracticalFit} looks strongest on current practical fit, while ${input.strongestEmotionalFit} carries the stronger emotional pull.`
+      ? buildSplitSummary(
+          input.strongestPracticalFit,
+          input.strongestEmotionalFit,
+          input.comparisonEntries,
+        )
       : input.strongestFit
         ? `${input.strongestFit} is the strongest current fit across the available research, but it is still a narrowing signal rather than a final recommendation.`
         : "The current comparison is narrowing the field, but not enough to declare a single clear front-runner."
@@ -442,14 +501,17 @@ function buildComparisonSummary(input: {
   const researchFrame = input.comparisonEntries.some((entry) => requiresMoreResearch(entry))
     ? "At least one option still has enough uncertainty that shortlist narrowing should stay provisional."
     : "The current evidence is strong enough to support a practical narrowing move rather than another fully open-ended research loop."
+  const pressureFrame = buildShortlistPressureFrame(input.comparisonEntries)
 
-  return `${practicalVsEmotionalSplit} This pass compares the shortlist through ${priorityFrame}. ${readinessFrame} ${researchFrame} ${weakestFrame}`.trim()
+  return `${practicalVsEmotionalSplit} This pass compares the shortlist through ${priorityFrame}. ${readinessFrame} ${researchFrame} ${pressureFrame} ${weakestFrame}`.trim()
 }
 
 function collectKeyTradeoffs(entries: DestinationComparisonEntry[]) {
   const emotionalVsPracticalTradeoff = findEmotionalPracticalTradeoff(entries)
+  const shortlistPressureTradeoff = buildShortlistPressureFrame(entries)
   return uniqueStrings([
     emotionalVsPracticalTradeoff,
+    shortlistPressureTradeoff,
     ...entries.flatMap((entry) => entry.tradeoffs),
   ]).slice(0, 6)
 }
@@ -462,8 +524,10 @@ function buildRecommendedNextMove(input: {
   comparisonEntries: DestinationComparisonEntry[]
   needsMoreResearchOn: string[]
 }) {
+  const pressureTestFocus = buildPressureTestFocus(input.comparisonEntries)
+
   if (!input.strongestFit) {
-    return `Do one more comparison pass focused on the unresolved pressure points in ${joinHuman(input.needsMoreResearchOn.slice(0, 2)) || "the current shortlist"} before trying to force a winner.`
+    return `Do one more comparison pass focused on ${pressureTestFocus || joinHuman(input.needsMoreResearchOn.slice(0, 2)) || "the unresolved pressure points in the current shortlist"} before trying to force a winner.`
   }
 
   if (
@@ -471,11 +535,11 @@ function buildRecommendedNextMove(input: {
     input.strongestEmotionalFit &&
     input.strongestPracticalFit !== input.strongestEmotionalFit
   ) {
-    return `Pressure-test ${input.strongestPracticalFit} against ${input.strongestEmotionalFit} on the exact tradeoff that matters most to you now, then decide whether this phase should be led by current practicality or lived belonging.`
+    return `Pressure-test ${input.strongestPracticalFit} against ${input.strongestEmotionalFit} on ${pressureTestFocus || "the exact tradeoff that matters most to you now"}, then decide whether this phase should be led by current practicality or lived belonging.`
   }
 
   if (input.needsMoreResearchOn.length > 0) {
-    return `Keep ${input.strongestFit} as the lead option for now, but verify the highest-risk open questions on ${joinHuman(input.needsMoreResearchOn.slice(0, 2))} before treating the shortlist as planning-ready.`
+    return `Keep ${input.strongestFit} as the lead option for now, but verify ${pressureTestFocus || `the highest-risk open questions on ${joinHuman(input.needsMoreResearchOn.slice(0, 2))}`} before treating the shortlist as planning-ready.`
   }
 
   if (input.readinessProfile.readinessLevel === "early" || input.readinessProfile.readinessLevel === "emerging") {
@@ -537,7 +601,7 @@ function buildReadinessTension(
   }
 
   if (containsAny(report.recommendedNextStep, ["city", "consular", "eligibility", "housing"])) {
-  return [
+    return [
       `${report.destination} may fit later, but it still asks for a more organized prep pass than this readiness stage may comfortably support.`,
     ]
   }
@@ -570,9 +634,9 @@ function requiresMoreResearch(entry: DestinationComparisonEntry) {
 
 function findEmotionalPracticalTradeoff(entries: DestinationComparisonEntry[]) {
   const strongestPractical = [...entries]
-    .sort((left, right) => verdictToPoints(right.practicalFit) - verdictToPoints(left.practicalFit))[0]
+    .sort((left, right) => right.practicalPoints - left.practicalPoints)[0]
   const strongestEmotional = [...entries]
-    .sort((left, right) => verdictToPoints(right.emotionalFit) - verdictToPoints(left.emotionalFit))[0]
+    .sort((left, right) => right.emotionalPoints - left.emotionalPoints)[0]
 
   if (
     !strongestPractical ||
@@ -652,10 +716,10 @@ function resolveNonNegotiableStatus(nonNegotiablePenalty: number): NonNegotiable
 }
 
 function verdictFromPoints(points: number): FitVerdict {
-  if (points >= 4) {
+  if (points >= 6) {
     return "strongFit"
   }
-  if (points >= 3) {
+  if (points >= 4) {
     return "moderateFit"
   }
   if (points >= 2) {
@@ -684,7 +748,131 @@ function combineVerdicts(
   ]
   const average = points.reduce((sum, value) => sum + value, 0) / points.length
 
-  return verdictFromPoints(Math.round(average))
+  if (average >= 3.5) {
+    return "strongFit"
+  }
+  if (average >= 2.75) {
+    return "moderateFit"
+  }
+  if (average >= 1.75) {
+    return "weakFit"
+  }
+
+  return "tooEarlyToJudge"
+}
+
+function summarizePracticalDrivers(
+  report: DestinationResearchReport,
+  priorities: string[],
+  practicalFit: FitVerdict,
+) {
+  const signals = extractThemes([
+    ...priorities,
+    report.sections.costOfLiving?.summary,
+    report.sections.healthcare?.summary,
+    report.sections.safety?.summary,
+    report.sections.education?.summary,
+    report.fitNotes.majorTradeoffs.join(" "),
+  ])
+
+  if (practicalFit === "strongFit") {
+    return `${joinHuman(signals.slice(0, 2)) || "budget, systems, and readiness"} are holding up better than the main friction points`
+  }
+
+  return `${joinHuman(signals.slice(0, 2)) || "the practical filters"} still has meaningful friction once confidence, budget realism, and logistics are factored in`
+}
+
+function summarizeEmotionalDrivers(
+  report: DestinationResearchReport,
+  priorities: string[],
+  emotionalFit: FitVerdict,
+) {
+  const signals = extractThemes([
+    ...priorities,
+    report.sections.cultureIntegration?.summary,
+    report.sections.climateEnvironment?.summary,
+    report.fitNotes.whyItMayFit.join(" "),
+  ])
+
+  if (emotionalFit === "strongFit") {
+    return `${joinHuman(signals.slice(0, 2)) || "belonging, climate, and pace"} still has genuine pull in the current research`
+  }
+
+  return `${joinHuman(signals.slice(0, 2)) || "the emotional pull"} is present, but not clean enough yet to outweigh the current friction`
+}
+
+function summarizeStageDrivers(
+  report: DestinationResearchReport,
+  readinessProfile: ReadinessProfile,
+  currentStageFit: FitVerdict,
+) {
+  if (currentStageFit === "strongFit") {
+    return `${report.destination} does not ask for much more structure than ${readinessProfile.readinessLevel} readiness can currently support`
+  }
+
+  return `${report.destination} still asks for enough verification, admin discipline, or city-level narrowing that the timing could outrun the current prep stage`
+}
+
+function buildSplitSummary(
+  strongestPracticalFit: string,
+  strongestEmotionalFit: string,
+  comparisonEntries: DestinationComparisonEntry[],
+) {
+  const practicalEntry = comparisonEntries.find((entry) => entry.destination === strongestPracticalFit)
+  const emotionalEntry = comparisonEntries.find((entry) => entry.destination === strongestEmotionalFit)
+  const practicalEdge = practicalEntry ? joinHuman(extractThemes([...practicalEntry.strengths, ...practicalEntry.notes]).slice(0, 2)) : "current practicality"
+  const emotionalEdge = emotionalEntry ? joinHuman(extractThemes([...emotionalEntry.strengths, ...emotionalEntry.notes]).slice(0, 2)) : "emotional pull"
+
+  return `${strongestPracticalFit} looks strongest on current practical fit because of ${practicalEdge}, while ${strongestEmotionalFit} carries the stronger emotional pull through ${emotionalEdge}.`
+}
+
+function buildShortlistPressureFrame(entries: DestinationComparisonEntry[]) {
+  const focus = buildPressureTestFocus(entries)
+  return focus ? `The shortlist pressure-test is ${focus}.` : ""
+}
+
+function buildPressureTestFocus(entries: DestinationComparisonEntry[]) {
+  if (entries.length === 0) {
+    return ""
+  }
+
+  const sortedByPractical = [...entries].sort((left, right) => right.practicalPoints - left.practicalPoints)
+  const sortedByEmotional = [...entries].sort((left, right) => right.emotionalPoints - left.emotionalPoints)
+  const strongestPractical = sortedByPractical[0]
+  const strongestEmotional = sortedByEmotional[0]
+
+  if (
+    strongestPractical &&
+    strongestEmotional &&
+    strongestPractical.destination !== strongestEmotional.destination
+  ) {
+    const practicalThemes = extractPracticalThemes([
+      ...strongestPractical.strengths,
+      ...strongestPractical.notes,
+    ]).slice(0, 2)
+    const emotionalThemes = extractEmotionalThemes([
+      ...strongestEmotional.strengths,
+      ...strongestEmotional.notes,
+    ]).slice(0, 2)
+
+    return `whether ${strongestPractical.destination}'s ${joinHuman(practicalThemes) || "practical edge"} matters more right now than ${strongestEmotional.destination}'s ${joinHuman(emotionalThemes) || "emotional pull"}`
+  }
+
+  const mostPressured = [...entries].sort((left, right) => right.tensions.length - left.tensions.length)[0]
+  if (!mostPressured) {
+    return ""
+  }
+
+  const pressureThemes = extractPressureThemes([
+    ...mostPressured.tensions,
+    ...mostPressured.tradeoffs,
+  ]).slice(0, 2)
+
+  if (pressureThemes.length === 0) {
+    return ""
+  }
+
+  return `whether ${mostPressured.destination} can survive ${joinHuman(pressureThemes)} once you compare it against the rest of the shortlist on the same criteria`
 }
 
 function uniqueDestinationReports(reports: DestinationResearchReport[]) {
@@ -726,8 +914,11 @@ function verdictToPoints(verdict: FitVerdict) {
   return 1
 }
 
-function clampPoints(points: number) {
-  return Math.max(1, Math.min(4, points))
+function startingPoints(verdict: FitVerdict) {
+  if (verdict === "strongFit") return 4
+  if (verdict === "moderateFit") return 3
+  if (verdict === "weakFit") return 1
+  return 0
 }
 
 function humanizeVerdict(verdict: FitVerdict) {
@@ -767,6 +958,94 @@ function joinHuman(items: string[]) {
 
 function withIndefiniteArticle(value: string) {
   return /^[aeiou]/i.test(value) ? `an ${value}` : `a ${value}`
+}
+
+function extractThemes(values: Array<string | undefined>) {
+  const text = values.filter(Boolean).join(" ").toLowerCase()
+  const matches: string[] = []
+
+  const themeMap: Array<{ label: string; patterns: string[] }> = [
+    { label: "belonging", patterns: ["belong", "socially warm", "welcoming", "diaspora"] },
+    { label: "english environment", patterns: ["english", "language"] },
+    { label: "healthcare", patterns: ["healthcare", "health", "medical", "private care"] },
+    { label: "stability", patterns: ["stability", "stable", "systems"] },
+    { label: "infrastructure", patterns: ["infrastructure"] },
+    { label: "affordability", patterns: ["afford", "budget", "cost"] },
+    { label: "pace of life", patterns: ["pace", "calm", "peace"] },
+    { label: "warm climate", patterns: ["warm", "climate", "temperate", "mild", "heat"] },
+    { label: "housing pressure", patterns: ["housing pressure", "housing"] },
+    { label: "regional safety variance", patterns: ["regional safety variance", "regional variation", "safety", "risk"] },
+    { label: "bureaucratic inconsistency", patterns: ["bureaucratic inconsistency", "bureaucracy", "admin friction"] },
+    { label: "education", patterns: ["school", "education"] },
+    { label: "tax complexity", patterns: ["tax"] },
+  ]
+
+  for (const theme of themeMap) {
+    if (theme.patterns.some((pattern) => text.includes(pattern))) {
+      matches.push(theme.label)
+    }
+  }
+
+  return uniqueStrings(matches)
+}
+
+function extractPressureThemes(values: Array<string | undefined>) {
+  const specificThemes = extractThemes(values).filter((theme) =>
+    [
+      "housing pressure",
+      "regional safety variance",
+      "bureaucratic inconsistency",
+      "infrastructure",
+      "tax complexity",
+      "education",
+      "healthcare",
+    ].includes(theme)
+  )
+
+  if (specificThemes.length > 0) {
+    return specificThemes
+  }
+
+  return extractThemes(values)
+}
+
+function extractPracticalThemes(values: Array<string | undefined>) {
+  const practicalThemes = extractThemes(values).filter((theme) =>
+    [
+      "healthcare",
+      "stability",
+      "infrastructure",
+      "affordability",
+      "housing pressure",
+      "regional safety variance",
+      "bureaucratic inconsistency",
+      "education",
+      "tax complexity",
+    ].includes(theme)
+  )
+
+  if (practicalThemes.length > 0) {
+    return practicalThemes
+  }
+
+  return extractThemes(values)
+}
+
+function extractEmotionalThemes(values: Array<string | undefined>) {
+  const emotionalThemes = extractThemes(values).filter((theme) =>
+    [
+      "belonging",
+      "english environment",
+      "pace of life",
+      "warm climate",
+    ].includes(theme)
+  )
+
+  if (emotionalThemes.length > 0) {
+    return emotionalThemes
+  }
+
+  return extractThemes(values)
 }
 
 function requireArtifact<T>(value: T | undefined, name: string): T {
