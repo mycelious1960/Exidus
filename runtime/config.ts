@@ -70,7 +70,7 @@ export function describeRuntimeConfig() {
 function resolveDocsRoot(repoRoot: string) {
   const override = process.env.EXIDUS_DOCS_ROOT?.trim()
   if (override) {
-    return path.resolve(override)
+    return resolveConfiguredPath(override, repoRoot)
   }
 
   const siblingDocsRoot = path.resolve(repoRoot, "..", "obsidian-exidus")
@@ -81,20 +81,34 @@ function resolveDocsRoot(repoRoot: string) {
   return siblingDocsRoot
 }
 
-function resolvePathFromEnv(name: string, fallback: string) {
+function resolvePathFromEnv(name: string, fallback: string, baseDir = CURRENT_DIR) {
   const value = process.env[name]?.trim()
   if (!value) {
     return fallback
   }
 
-  return path.resolve(value)
+  return resolveConfiguredPath(value, baseDir)
 }
 
 function parsePort(rawPort: string | undefined) {
-  const candidate = Number(rawPort ?? 3000)
-  if (Number.isInteger(candidate) && candidate > 0) {
+  if (!rawPort || rawPort.trim().length === 0) {
+    return 3000
+  }
+
+  const candidate = Number(rawPort)
+  if (Number.isInteger(candidate) && candidate > 0 && candidate <= 65535) {
     return candidate
   }
 
-  return 3000
+  throw new Error(
+    `Invalid PORT value "${rawPort}". Set PORT to an integer between 1 and 65535.`,
+  )
+}
+
+function resolveConfiguredPath(value: string, baseDir: string) {
+  if (path.isAbsolute(value)) {
+    return path.normalize(value)
+  }
+
+  return path.resolve(baseDir, value)
 }

@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node --experimental-strip-types app/start.ts",
     "dev": "node --experimental-strip-types app/start.ts",
+    "inspect:startup": "node --experimental-strip-types runtime/demo/inspect-startup.ts",
     "inspect:runtime": "node --experimental-strip-types runtime/demo/run-demo.ts",
     "inspect:config": "node --experimental-strip-types runtime/demo/inspect-config.ts"
   }

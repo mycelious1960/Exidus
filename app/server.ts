@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises"
 import { ASSESSMENT_FLOW } from "../runtime/assessment/flow.ts"
 import { runAssessmentSubmission } from "../runtime/assessment/submit.ts"
 import { describeRuntimeConfig, getRuntimeConfig } from "../runtime/config.ts"
+import { inspectStartupReadiness } from "../runtime/startup.ts"
 import { getExidusRuntime } from "../runtime/system.ts"
 import type { RuntimeArtifacts } from "../runtime/core/types.ts"
 import { applyApprovalDecision, createApprovalDecision } from "../runtime/improvement/review-workflow.ts"
@@ -35,25 +36,32 @@ export function createAppServer() {
 
     try {
       if (request.method === "GET" && url.pathname === "/api/health") {
-        const config = describeRuntimeConfig()
-        return sendJson(response, 200, {
-          status: "ok",
+        const startup = await inspectStartupReadiness()
+        const config = startup.config
+        return sendJson(response, startup.ok ? 200 : 503, {
+          status: startup.ok ? "ok" : "error",
           service: "exidus-app",
           runtimeEnv: config.runtimeEnv,
           host: config.host,
           port: config.port,
-          checks: {
-            docsRootConfigured: Boolean(config.docsRoot),
-            manifestPathConfigured: Boolean(config.manifestPath),
-            sessionsRootConfigured: Boolean(config.sessionsRoot),
-          },
+          checks: startup.checks,
         })
       }
 
       if (request.method === "GET" && url.pathname === "/api/runtime/stack") {
+        const startup = await inspectStartupReadiness()
+        if (!startup.ok) {
+          return sendJson(response, 503, {
+            runtime: startup.config,
+            startup,
+            error: "Runtime dependencies are not ready.",
+          })
+        }
+
         const runtime = await getExidusRuntime()
         return sendJson(response, 200, {
-          runtime: describeRuntimeConfig(),
+          runtime: startup.config,
+          startup,
           manifest: {
             system: runtime.manifest.system,
             manifestVersion: runtime.manifest.manifestVersion,
@@ -640,9 +648,12 @@ export function startAppServer() {
 function resolvePublicPath(pathname: string) {
   const { publicDir } = getRuntimeConfig()
   const normalized = pathname === "/" ? "/index.html" : pathname
-  const fullPath = path.join(publicDir, normalized)
+  const fullPath = path.resolve(publicDir, `.${normalized}`)
 
-  if (!fullPath.startsWith(publicDir)) {
+  if (
+    fullPath !== publicDir &&
+    !fullPath.startsWith(`${publicDir}${path.sep}`)
+  ) {
     throw new Error("Invalid path")
   }
 
